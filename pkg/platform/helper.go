@@ -1112,7 +1112,7 @@ func WaitForVirtualClusterInstance(ctx context.Context, managementClient kube.In
 
 	if virtualClusterInstance.Status.Phase == storagev1.InstanceSleeping {
 		log.Info("Wait until vcluster wakes up")
-		defer log.Donef("Successfully woken up vcluster %s", name)
+		defer log.Donef("vCluster %s wakeup successful", name)
 		err := wakeupVCluster(ctx, managementClient, virtualClusterInstance)
 		if err != nil {
 			return nil, fmt.Errorf("error waking up vcluster %s: %s", name, util.GetCause(err))
