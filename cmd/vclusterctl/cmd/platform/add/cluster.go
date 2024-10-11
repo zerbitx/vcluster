@@ -3,7 +3,6 @@ package add
 import (
 	"cmp"
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -62,11 +61,10 @@ vcluster platform add cluster my-cluster
 ########################################################
 		`,
 		RunE: func(cobraCmd *cobra.Command, args []string) error {
-			newArgs, err := util.PromptForArgs(cmd.Log, args, "cluster name")
-			if err != nil && errors.Is(err, util.ErrNonInteractive) {
-				if err := cobra.ExactArgs(1)(cobraCmd, args); err != nil {
-					return err
-				}
+			prompter := util.ArgsPrompter(cobraCmd, cobra.ExactArgs(1))
+			newArgs, err := prompter(cmd.Log, args, "vcluster name")
+			if err != nil {
+				return err
 			}
 
 			// Check for newer version
