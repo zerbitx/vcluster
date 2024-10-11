@@ -1,7 +1,6 @@
 package util
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 
@@ -18,8 +17,6 @@ var (
 	VClusterNameOnlyUseLine string
 
 	VClusterNameOnlyValidator cobra.PositionalArgs
-
-	ErrNonInteractive = errors.New("terminal is not interactive")
 )
 
 func init() {
@@ -74,28 +71,34 @@ func NamedPositionalArgsValidator(failMissing, failExtra bool, expectedArgs ...s
 	}
 }
 
-// PromptForArgs expects that the terminal is interactive and the number of args, matched the number of argNames, in the
+// ArgsPrompter takes a command and fallback validator and returns a function to prompt for missing args if the terminal
+// is interactive, otherwise it calls the provided validator.
+// If interactive, the prompter expects that the number of args, matched the number of argNames, in the
 // order they should appear and will prompt one by one for the missing args adding them to the args slice and returning
 // a new set for a command to use. It returns the args, rather than a nil slice so they're unaltered in error cases.
-func PromptForArgs(l log.Logger, args []string, argNames ...string) ([]string, error) {
-	if !terminal.IsTerminalIn {
-		return args, ErrNonInteractive
-	}
+func ArgsPrompter(cmd *cobra.Command, validator cobra.PositionalArgs) func(l log.Logger, args []string, argNames ...string) ([]string, error) {
+	return func(l log.Logger, args []string, argNames ...string) ([]string, error) {
+		// For non-interactive terminals, skip prompting and
+		// just call the provided validator
+		if !terminal.IsTerminalIn {
+			return args, validator(cmd, args)
+		}
 
-	if len(args) == len(argNames) {
+		if len(args) == len(argNames) {
+			return args, nil
+		}
+
+		for i := range argNames[len(args):] {
+			answer, err := l.Question(&survey.QuestionOptions{
+				Question: fmt.Sprintf("Please specify %s", argNames[i]),
+			})
+
+			if err != nil {
+				return args, err
+			}
+			args = append(args, answer)
+		}
+
 		return args, nil
 	}
-
-	for i := range argNames[len(args):] {
-		answer, err := l.Question(&survey.QuestionOptions{
-			Question: fmt.Sprintf("Please specify %s", argNames[i]),
-		})
-
-		if err != nil {
-			return args, err
-		}
-		args = append(args, answer)
-	}
-
-	return args, nil
 }

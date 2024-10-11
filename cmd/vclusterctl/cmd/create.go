@@ -3,7 +3,6 @@ package cmd
 import (
 	"cmp"
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/loft-sh/log"
@@ -46,11 +45,10 @@ vcluster create test --namespace test
 #######################################################
 	`,
 		RunE: func(cobraCmd *cobra.Command, args []string) error {
-			newArgs, err := util.PromptForArgs(cmd.log, args, "vcluster name")
-			if err != nil && errors.Is(err, util.ErrNonInteractive) {
-				if err := util.VClusterNameOnlyValidator(cobraCmd, args); err != nil {
-					return err
-				}
+			prompter := util.ArgsPrompter(cobraCmd, util.VClusterNameOnlyValidator)
+			newArgs, err := prompter(cmd.log, args, "vcluster name")
+			if err != nil {
+				return err
 			}
 
 			// Check for newer version
