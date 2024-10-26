@@ -417,7 +417,7 @@ func (r *SyncController) extractRequest(ctx *synccontext.SyncContext, req ctrl.R
 	return req, pReq, nil
 }
 
-func (r *SyncController) enqueueVirtual(_ context.Context, obj client.Object, q workqueue.TypedRateLimitingInterface[ctrl.Request], eventType synccontext.SyncEventType) {
+func (r *SyncController) enqueueVirtual(ctx context.Context, obj client.Object, q workqueue.TypedRateLimitingInterface[ctrl.Request], eventType synccontext.SyncEventType) {
 	if obj == nil {
 		return
 	}
@@ -433,7 +433,15 @@ func (r *SyncController) enqueueVirtual(_ context.Context, obj client.Object, q 
 	case synccontext.SyncEventTypeCreate:
 		request = toCreateRequest(request)
 	case synccontext.SyncEventTypeUpdate:
-		if !obj.GetDeletionTimestamp().IsZero() {
+		syncContext := r.newSyncContext(ctx, obj.GetName())
+		excluded, pObj, err := r.getPhysicalObject(syncContext, r.syncer.VirtualToHost(syncContext, request.NamespacedName, obj), obj)
+
+		// don't enqueue
+		if err != nil || excluded {
+			return
+		}
+
+		if isDeleting(obj) || isDeleting(pObj) {
 			request = toPendingDeleteRequest(request)
 		} else {
 			request = toUpdateRequest(request)
@@ -444,6 +452,10 @@ func (r *SyncController) enqueueVirtual(_ context.Context, obj client.Object, q 
 	}
 
 	q.Add(request)
+}
+
+func isDeleting(obj client.Object) bool {
+	return obj != nil && !obj.GetDeletionTimestamp().IsZero()
 }
 
 func (r *SyncController) enqueuePhysical(ctx context.Context, obj client.Object, q workqueue.TypedRateLimitingInterface[ctrl.Request], eventType synccontext.SyncEventType) {
@@ -502,20 +514,18 @@ func (r *SyncController) enqueuePhysical(ctx context.Context, obj client.Object,
 			hostRequest = toCreateRequest(hostRequest)
 		}
 	case synccontext.SyncEventTypeUpdate:
-		if !obj.GetDeletionTimestamp().IsZero() {
+		if isDeleting(obj) {
 			hostRequest = toPendingDeleteRequest(hostRequest)
 		} else {
 			hostRequest = toUpdateRequest(hostRequest)
 		}
 	case synccontext.SyncEventTypeDelete:
-		if !isDelete {
-			if !obj.GetDeletionTimestamp().IsZero() {
-				hostRequest = toPendingDeleteRequest(hostRequest)
-			} else {
-				hostRequest = toUpdateRequest(hostRequest)
-			}
-		} else {
+		if isDelete {
 			hostRequest = toDeleteRequest(hostRequest)
+		} else if isDeleting(obj) {
+			hostRequest = toPendingDeleteRequest(hostRequest)
+		} else {
+			hostRequest = toUpdateRequest(hostRequest)
 		}
 	default:
 	}
