@@ -3,17 +3,13 @@ package cli
 import (
 	"context"
 	"fmt"
-	"strconv"
-	"time"
 
-	clusterv1 "github.com/loft-sh/agentapi/v4/pkg/apis/loft/cluster/v1"
 	managementv1 "github.com/loft-sh/api/v4/pkg/apis/management/v1"
 	"github.com/loft-sh/log"
 	"github.com/loft-sh/vcluster/pkg/cli/config"
 	"github.com/loft-sh/vcluster/pkg/cli/find"
+	"github.com/loft-sh/vcluster/pkg/cli/sleepmode"
 	"github.com/loft-sh/vcluster/pkg/platform"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 func ResumePlatform(ctx context.Context, options *ResumeOptions, config *config.CLI, vClusterName string, log log.Logger) error {
@@ -26,9 +22,12 @@ func ResumePlatform(ctx context.Context, options *ResumeOptions, config *config.
 		return err
 	}
 
+	projectName := vCluster.Project.Name
 	virtualClusterInstance := vCluster.VirtualCluster
-	if virtualClusterInstance.Annotations[clusterv1.SleepScopeAnnotation] == "workloads-only" {
-		return workloadWakeOnly(ctx, platformClient, log, vClusterName, virtualClusterInstance)
+	// Check if the vCluster is in workload sleep mode and wake it.
+	used, err := tryWorkloadWakePlatform(ctx, platformClient, projectName, log, vClusterName, virtualClusterInstance)
+	if used {
+		return err
 	}
 
 	if !vCluster.IsInstanceSleeping() {
@@ -54,41 +53,41 @@ func ResumePlatform(ctx context.Context, options *ResumeOptions, config *config.
 	return nil
 }
 
-func workloadWakeOnly(ctx context.Context, platformClient platform.Client, log log.Logger, vClusterName string, virtualClusterInstance *managementv1.VirtualClusterInstance) error {
-	clusterName := virtualClusterInstance.Spec.ClusterRef.Cluster
-	if clusterName == "" {
-		return fmt.Errorf("cannot pause workload-scope vcluster: virtual cluster instance has no cluster ref (host cluster unknown)")
-	}
-
-	kClient, err := platformClient.Cluster(clusterName)
-	if err != nil {
-		return fmt.Errorf("failed to create client for host cluster %s: %w", clusterName, err)
-	}
-	configSecretName := "vc-config-" + vClusterName
+// tryWorkloadWakePlatform checks if whether workload sleep mode is configured and clears annotations for the instance to wake itself
+// sleep mode and clears the sleep annotations to wake it. Mirrors tryWorkloadSleepPlatform.
+func tryWorkloadWakePlatform(ctx context.Context, platformClient platform.Client, projectName string, log log.Logger, vClusterName string, virtualClusterInstance *managementv1.VirtualClusterInstance) (applied bool, retErr error) {
 	vcNamespace := virtualClusterInstance.Spec.ClusterRef.Namespace
-	configSecret, err := kClient.CoreV1().Secrets(vcNamespace).Get(ctx, configSecretName, metav1.GetOptions{})
+	sleepMgr, used, err := sleepmode.NewManager(ctx,
+		sleepmode.WithPlatformClient(platformClient),
+		sleepmode.WithProjectName(projectName),
+		sleepmode.WithVClusterName(vClusterName),
+		sleepmode.WithNamespace(vcNamespace),
+		sleepmode.WithVirtualClusterInstance(virtualClusterInstance),
+		sleepmode.WithLogger(log))
 	if err != nil {
-		return fmt.Errorf("failed to load the vcluster config: %w", err)
+		return false, err
 	}
 
-	orig := configSecret.DeepCopy()
-	if configSecret.Annotations == nil {
-		configSecret.Annotations = map[string]string{}
+	if !used {
+		return false, nil
 	}
 
-	delete(configSecret.Annotations, clusterv1.SleepModeForceAnnotation)
-	delete(configSecret.Annotations, clusterv1.SleepModeSleepTypeAnnotation)
-	delete(configSecret.Annotations, clusterv1.SleepModeForceDurationAnnotation)
-	configSecret.Annotations[clusterv1.SleepModeLastActivityAnnotation] = strconv.FormatInt(time.Now().Unix(), 10)
-	patch := client.MergeFrom(orig)
-	patchBytes, err := patch.Data(configSecret)
-	if err != nil {
-		return fmt.Errorf("failed to create patch for secret %s: %w", configSecretName, err)
+	// Standalone vClusters wake via the virtual cluster proxy.
+	if virtualClusterInstance.Spec.Standalone {
+		return sleepMgr.WakeStandalone(ctx)
 	}
 
-	if _, err := kClient.CoreV1().Secrets(vcNamespace).Patch(ctx, configSecretName, patch.Type(), patchBytes, metav1.PatchOptions{}); err != nil {
-		return fmt.Errorf("failed to wake vCluster: %w", err)
+	defer func() {
+		if retErr != nil {
+			log.Error(retErr, "Please try again.  If the problem persists, please contact support.")
+		}
+	}()
+
+	if !sleepMgr.IsSleeping() {
+		log.Infof("vCluster %s/%s workloads are already running", vcNamespace, vClusterName)
+		return true, nil
 	}
 
-	return nil
+	log.Infof("Waking vCluster %s/%s workloads", vcNamespace, vClusterName)
+	return true, sleepMgr.Wake(ctx)
 }

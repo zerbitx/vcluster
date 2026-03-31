@@ -3,10 +3,13 @@ package cli
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"time"
 
 	"github.com/loft-sh/log"
 	"github.com/loft-sh/vcluster/pkg/cli/find"
 	"github.com/loft-sh/vcluster/pkg/cli/flags"
+	"github.com/loft-sh/vcluster/pkg/cli/sleepmode"
 	"github.com/loft-sh/vcluster/pkg/lifecycle"
 	"github.com/loft-sh/vcluster/pkg/util/kubeclient"
 	"k8s.io/client-go/kubernetes"
@@ -50,6 +53,17 @@ func PauseVCluster(
 		log.Infof("vcluster %s/%s is already sleeping", vCluster.Namespace, vCluster.Name)
 		return nil
 	}
+	if vCluster.Status == find.StatusWorkloadSleeping {
+		log.Infof("vcluster %s/%s is already in workload sleep mode", vCluster.Namespace, vCluster.Name)
+		return nil
+	}
+
+	// Check if workload sleep mode is configured and apply it instead of scaling down.
+	if used, err := tryWorkloadSleepHelm(ctx, kubeClient, vCluster, log); err != nil {
+		return err
+	} else if used {
+		return nil
+	}
 
 	err := lifecycle.PauseVCluster(ctx, kubeClient, vCluster.Name, vCluster.Namespace, false, log)
 	if err != nil {
@@ -67,6 +81,33 @@ func PauseVCluster(
 	}
 
 	return nil
+}
+
+// tryWorkloadSleepHelm checks if whether workload sleep mode is configured and sets annotations for the instance to put itself to sleep
+// Returns true if workload sleep mode was applied.
+func tryWorkloadSleepHelm(ctx context.Context, kubeClient kubernetes.Interface, vCluster *find.VCluster, log log.Logger) (applied bool, retErr error) {
+	sleepMgr, ok, err := sleepmode.NewManager(ctx,
+		sleepmode.WithKubeClient(kubeClient),
+		sleepmode.WithNamespace(vCluster.Namespace),
+		sleepmode.WithVClusterName(vCluster.Name),
+		sleepmode.WithLogger(log),
+	)
+	if err != nil || !ok {
+		return ok, err
+	}
+
+	// Ultimately print a user friendly error message
+	defer func() {
+		if retErr != nil {
+			log.Error(retErr, "Please try again.  If the problem persists, please contact support.")
+		}
+	}()
+
+	log.Infof("vCluster %s/%s is configured for workload sleep mode, sleeping workloads only (control plane stays running)", vCluster.Namespace, vCluster.Name)
+
+	sleepingSince := strconv.FormatInt(time.Now().Unix(), 10)
+
+	return true, sleepMgr.Sleep(ctx, sleepingSince, nil)
 }
 
 func preparePause(vCluster *find.VCluster, globalFlags *flags.GlobalFlags) (*kubernetes.Clientset, error) {

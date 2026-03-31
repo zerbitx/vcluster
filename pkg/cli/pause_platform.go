@@ -12,11 +12,11 @@ import (
 	"github.com/loft-sh/log"
 	cliconfig "github.com/loft-sh/vcluster/pkg/cli/config"
 	"github.com/loft-sh/vcluster/pkg/cli/find"
+	"github.com/loft-sh/vcluster/pkg/cli/sleepmode"
 	"github.com/loft-sh/vcluster/pkg/platform"
 	"github.com/loft-sh/vcluster/pkg/platform/clihelper"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 func PausePlatform(ctx context.Context, options *PauseOptions, cfg *cliconfig.CLI, vClusterName string, log log.Logger) error {
@@ -30,10 +30,14 @@ func PausePlatform(ctx context.Context, options *PauseOptions, cfg *cliconfig.CL
 		return err
 	}
 
+	projectName := vCluster.Project.Name
 	log.Infof("Putting virtual cluster %s in project %s to sleep", vCluster.VirtualCluster.Name, vCluster.Project.Name)
 	virtualClusterInstance := vCluster.VirtualCluster
-	if virtualClusterInstance.Annotations[clusterv1.SleepScopeAnnotation] == "workloads-only" {
-		return workloadSleepOnly(ctx, platformClient, options, log, vClusterName, virtualClusterInstance)
+
+	// Check if the vCluster config enables workload sleep mode natively (no agent).
+	used, err := tryWorkloadSleepPlatform(ctx, platformClient, projectName, options.ForceDuration, log, vClusterName, virtualClusterInstance)
+	if used {
+		return err
 	}
 
 	if vCluster.IsInstanceSleeping() {
@@ -77,42 +81,35 @@ func PausePlatform(ctx context.Context, options *PauseOptions, cfg *cliconfig.CL
 	return nil
 }
 
-func workloadSleepOnly(ctx context.Context, platformClient platform.Client, options *PauseOptions, log log.Logger, vClusterName string, virtualClusterInstance *managementv1.VirtualClusterInstance) error {
-	log.Infof("This vCluster is configured to pause only workloads, control plane will be left running")
-	clusterName := virtualClusterInstance.Spec.ClusterRef.Cluster
-	if clusterName == "" {
-		return fmt.Errorf("cannot pause workload-scope vcluster: virtual cluster instance has no cluster ref (host cluster unknown)")
-	}
+// tryWorkloadSleepPlatform will determine if workload sleep is applicable and apply it if so, returning true if applied
+func tryWorkloadSleepPlatform(ctx context.Context, platformClient platform.Client, projectName string, forceDuration int64, log log.Logger, vClusterName string, virtualClusterInstance *managementv1.VirtualClusterInstance) (applied bool, retErr error) {
+	sleepMgr, used, err := sleepmode.NewManager(ctx,
+		sleepmode.WithPlatformClient(platformClient),
+		sleepmode.WithProjectName(projectName),
+		sleepmode.WithVirtualClusterInstance(virtualClusterInstance),
+		sleepmode.WithVClusterName(vClusterName),
+		sleepmode.WithNamespace(virtualClusterInstance.Spec.ClusterRef.Namespace),
+		sleepmode.WithLogger(log))
 
-	kClient, err := platformClient.Cluster(clusterName)
 	if err != nil {
-		return fmt.Errorf("failed to create client for host cluster %s: %w", clusterName, err)
-	}
-	configSecretName := "vc-config-" + vClusterName
-	vcNamespace := virtualClusterInstance.Spec.ClusterRef.Namespace
-	configSecret, err := kClient.CoreV1().Secrets(vcNamespace).Get(ctx, configSecretName, metav1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to load the vcluster config: %w", err)
+		return false, err
 	}
 
-	orig := configSecret.DeepCopy()
-	if configSecret.Annotations == nil {
-		configSecret.Annotations = map[string]string{}
+	if !used {
+		return false, nil
 	}
 
-	configSecret.Annotations[clusterv1.SleepModeSleepTypeAnnotation] = clusterv1.SleepTypeForced
-	if options.ForceDuration >= 0 {
-		configSecret.Annotations[clusterv1.SleepModeForceDurationAnnotation] = strconv.FormatInt(options.ForceDuration, 10)
-	}
-	patch := client.MergeFrom(orig)
-	patchBytes, err := patch.Data(configSecret)
-	if err != nil {
-		return fmt.Errorf("failed to create patch for secret %s: %w", configSecretName, err)
+	if virtualClusterInstance.Spec.Standalone {
+		return sleepMgr.SleepStandalone(ctx, forceDuration)
 	}
 
-	if _, err := kClient.CoreV1().Secrets(vcNamespace).Patch(ctx, configSecretName, patch.Type(), patchBytes, metav1.PatchOptions{}); err != nil {
-		return fmt.Errorf("failed to sleep vCluster: %w", err)
-	}
+	defer func() {
+		if retErr != nil {
+			log.Error(retErr, "Please try again.  If the problem persists, please contact support.")
+		}
+	}()
 
-	return nil
+	sleepingSince := strconv.FormatInt(time.Now().Unix(), 10)
+	log.Infof("vCluster %s/%s is configured for workload sleep mode, sleeping workloads only (control plane stays running)", virtualClusterInstance.Spec.ClusterRef.Namespace, vClusterName)
+	return true, sleepMgr.Sleep(ctx, sleepingSince, sleepmode.SleepDuration(forceDuration))
 }
