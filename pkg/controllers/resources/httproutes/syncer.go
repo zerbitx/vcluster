@@ -60,10 +60,12 @@ func (s *httpRouteSyncer) SyncToHost(ctx *synccontext.SyncContext, event *syncco
 		return patcher.DeleteVirtualObject(ctx, event.Virtual, event.HostOld, "host object was deleted")
 	}
 
-	pObj := translate.HostMetadata(event.Virtual, s.VirtualToHost(ctx, types.NamespacedName{Name: event.Virtual.Name, Namespace: event.Virtual.Namespace}, event.Virtual))
-	pObj.Spec = *event.Virtual.Spec.DeepCopy()
+	pObj, err := s.translate(ctx, event.Virtual)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 
-	err := pro.ApplyPatchesHostObject(ctx, nil, pObj, event.Virtual, ctx.Config.Sync.ToHost.HTTPRoutes.Patches, false)
+	err = pro.ApplyPatchesHostObject(ctx, nil, pObj, event.Virtual, ctx.Config.Sync.ToHost.HTTPRoutes.Patches, false)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -72,6 +74,16 @@ func (s *httpRouteSyncer) SyncToHost(ctx *synccontext.SyncContext, event *syncco
 }
 
 func (s *httpRouteSyncer) Sync(ctx *synccontext.SyncContext, event *synccontext.SyncEvent[*gatewayv1.HTTPRoute]) (_ ctrl.Result, retErr error) {
+	hSpec, err := translateSpecToHost(ctx, event.Virtual)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to translate spec: %w", err)
+	}
+
+	vStatus, err := translateStatusToVirtual(ctx, event.Host.Namespace, event.Virtual.Namespace, event.Host.Status)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to translate status: %w", err)
+	}
+
 	patch, err := patcher.NewSyncerPatcher(ctx, event.Host, event.Virtual, patcher.TranslatePatches(ctx.Config.Sync.ToHost.HTTPRoutes.Patches, false))
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("new syncer patcher: %w", err)
@@ -94,10 +106,10 @@ func (s *httpRouteSyncer) Sync(ctx *synccontext.SyncContext, event *synccontext.
 		}
 	}()
 
-	event.Virtual.Status = event.Host.Status
+	event.Virtual.Status = vStatus
 	event.Virtual.Labels, event.Host.Labels = translate.LabelsBidirectionalUpdate(event)
 	event.Virtual.Annotations, event.Host.Annotations = translate.AnnotationsBidirectionalUpdate(event)
-	event.Host.Spec = *event.Virtual.Spec.DeepCopy()
+	event.Host.Spec = *hSpec
 
 	return ctrl.Result{}, nil
 }
