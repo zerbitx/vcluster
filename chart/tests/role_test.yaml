@@ -397,6 +397,29 @@ tests:
             verbs:
               ["create", "delete", "patch", "update", "get", "list", "watch"]
 
+  - it: httproutes sync
+    set:
+      sync:
+        toHost:
+          httpRoutes:
+            enabled: true
+    release:
+      name: my-release
+      namespace: my-namespace
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: kind
+          value: Role
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["gateway.networking.k8s.io"]
+            resources: ["httproutes"]
+            verbs:
+              ["create", "delete", "patch", "update", "get", "list", "watch"]
+
   - it: private nodes
     set:
       privateNodes:
