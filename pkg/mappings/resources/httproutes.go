@@ -21,7 +21,7 @@ func CreateHTTPRouteMapper(ctx *synccontext.RegisterContext) (synccontext.Mapper
 		Kind:    "HTTPRoute",
 	}
 
-	err := ensureHostGatewayAPIKind(ctx, gvk, "sync.toHost.httpRoutes.enabled")
+	err := ensureHostGatewayAPIKind(ctx, gvk, "sync.toHost.gateways.enabled")
 	if err != nil {
 		return nil, err
 	}
