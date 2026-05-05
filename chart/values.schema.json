@@ -5070,6 +5070,10 @@
           "$ref": "#/$defs/EnableSwitchWithPatches",
           "description": "Gateways defines if gateways created within the virtual cluster should get synced to the host cluster."
         },
+        "httpRoutes": {
+          "$ref": "#/$defs/EnableSwitchWithPatches",
+          "description": "HTTPRoutes defines if HTTP routes created within the virtual cluster should get synced to the host cluster."
+        },
         "services": {
           "$ref": "#/$defs/EnableSwitchWithPatches",
           "description": "Services defines if services created within the virtual cluster should get synced to the host cluster."

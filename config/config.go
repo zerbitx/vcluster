@@ -1230,6 +1230,9 @@ type SyncToHost struct {
 	// Gateways defines if gateways created within the virtual cluster should get synced to the host cluster.
 	Gateways EnableSwitchWithPatches `json:"gateways,omitempty"`
 
+	// HTTPRoutes defines if HTTP routes created within the virtual cluster should get synced to the host cluster.
+	HTTPRoutes EnableSwitchWithPatches `json:"httpRoutes,omitempty"`
+
 	// Services defines if services created within the virtual cluster should get synced to the host cluster.
 	Services EnableSwitchWithPatches `json:"services,omitempty"`
 

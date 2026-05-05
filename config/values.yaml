@@ -45,6 +45,8 @@ sync:
       enabled: false
     gateways:
       enabled: false
+    httpRoutes:
+      enabled: false
     priorityClasses:
       enabled: false
     networkPolicies:
