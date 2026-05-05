@@ -85,10 +85,6 @@ sync:
     gateways:
       # Enabled defines if this option should be enabled.
       enabled: false
-    # HTTPRoutes defines if HTTP routes created within the virtual cluster should get synced to the host cluster.
-    httpRoutes:
-      # Enabled defines if this option should be enabled.
-      enabled: false
     # PriorityClasses defines if priority classes created within the virtual cluster should get synced to the host cluster.
     priorityClasses:
       # Enabled defines if this option should be enabled.

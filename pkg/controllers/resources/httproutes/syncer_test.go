@@ -140,7 +140,6 @@ func TestSyncRejectsUnsupportedRefs(t *testing.T) {
 
 func newHTTPRouteRegisterContext(vConfig *config.VirtualClusterConfig, pClient *testingutil.FakeIndexClient, vClient *testingutil.FakeIndexClient) *synccontext.RegisterContext {
 	vConfig.Sync.ToHost.Gateways.Enabled = true
-	vConfig.Sync.ToHost.HTTPRoutes.Enabled = true
 	return syncertesting.NewFakeRegisterContext(vConfig, pClient, vClient)
 }
 

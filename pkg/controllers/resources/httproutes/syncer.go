@@ -65,7 +65,7 @@ func (s *httpRouteSyncer) SyncToHost(ctx *synccontext.SyncContext, event *syncco
 		return ctrl.Result{}, err
 	}
 
-	err = pro.ApplyPatchesHostObject(ctx, nil, pObj, event.Virtual, ctx.Config.Sync.ToHost.HTTPRoutes.Patches, false)
+	err = pro.ApplyPatchesHostObject(ctx, nil, pObj, event.Virtual, nil, false)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -84,7 +84,7 @@ func (s *httpRouteSyncer) Sync(ctx *synccontext.SyncContext, event *synccontext.
 		return ctrl.Result{}, fmt.Errorf("failed to translate status: %w", err)
 	}
 
-	patch, err := patcher.NewSyncerPatcher(ctx, event.Host, event.Virtual, patcher.TranslatePatches(ctx.Config.Sync.ToHost.HTTPRoutes.Patches, false))
+	patch, err := patcher.NewSyncerPatcher(ctx, event.Host, event.Virtual, patcher.TranslatePatches(nil, false))
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("new syncer patcher: %w", err)
 	}
@@ -120,7 +120,7 @@ func (s *httpRouteSyncer) SyncToVirtual(ctx *synccontext.SyncContext, event *syn
 	}
 
 	vRoute := translate.VirtualMetadata(event.Host, s.HostToVirtual(ctx, types.NamespacedName{Name: event.Host.Name, Namespace: event.Host.Namespace}, event.Host))
-	err := pro.ApplyPatchesVirtualObject(ctx, nil, vRoute, event.Host, ctx.Config.Sync.ToHost.HTTPRoutes.Patches, false)
+	err := pro.ApplyPatchesVirtualObject(ctx, nil, vRoute, event.Host, nil, false)
 	if err != nil {
 		return ctrl.Result{}, err
 	}

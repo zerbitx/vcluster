@@ -246,7 +246,6 @@ func ValidateAllSyncPatches(sync config.Sync) error {
 			{"sync.toHost.serviceAccounts", sync.ToHost.ServiceAccounts.Patches},
 			{"sync.toHost.ingresses", sync.ToHost.Ingresses.Patches},
 			{"sync.toHost.gateways", sync.ToHost.Gateways.Patches},
-			{"sync.toHost.httpRoutes", sync.ToHost.HTTPRoutes.Patches},
 			{"sync.toHost.namespaces", sync.ToHost.Namespaces.Patches},
 			{"sync.toHost.networkPolicies", sync.ToHost.NetworkPolicies.Patches},
 			{"sync.toHost.persistentVolumeClaims", sync.ToHost.PersistentVolumeClaims.Patches},
