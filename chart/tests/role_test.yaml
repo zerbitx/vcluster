@@ -397,11 +397,11 @@ tests:
             verbs:
               ["create", "delete", "patch", "update", "get", "list", "watch"]
 
-  - it: httproutes sync
+  - it: gateway sync includes httproutes
     set:
       sync:
         toHost:
-          httpRoutes:
+          gateways:
             enabled: true
     release:
       name: my-release
@@ -412,6 +412,13 @@ tests:
       - equal:
           path: kind
           value: Role
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["gateway.networking.k8s.io"]
+            resources: ["gateways"]
+            verbs:
+              ["create", "delete", "patch", "update", "get", "list", "watch"]
       - contains:
           path: rules
           content:
