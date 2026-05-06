@@ -79,11 +79,6 @@ func (s *httpRouteSyncer) Sync(ctx *synccontext.SyncContext, event *synccontext.
 		return ctrl.Result{}, fmt.Errorf("failed to translate spec: %w", err)
 	}
 
-	vStatus, err := translateStatusToVirtual(ctx, event.Host.Namespace, event.Virtual.Namespace, event.Host.Status)
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to translate status: %w", err)
-	}
-
 	patch, err := patcher.NewSyncerPatcher(ctx, event.Host, event.Virtual, patcher.TranslatePatches(nil, false))
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("new syncer patcher: %w", err)
@@ -106,12 +101,17 @@ func (s *httpRouteSyncer) Sync(ctx *synccontext.SyncContext, event *synccontext.
 		}
 	}()
 
-	event.Virtual.Status = vStatus
+	vStatus, err := translateStatusToVirtual(ctx, event.Host, event.Virtual.Namespace, event.Host.Status)
+	if err != nil {
+		retErr = fmt.Errorf("failed to translate status: %w", err)
+	} else {
+		event.Virtual.Status = vStatus
+	}
 	event.Virtual.Labels, event.Host.Labels = translate.LabelsBidirectionalUpdate(event)
 	event.Virtual.Annotations, event.Host.Annotations = translate.AnnotationsBidirectionalUpdate(event)
 	event.Host.Spec = *hSpec
 
-	return ctrl.Result{}, nil
+	return ctrl.Result{}, retErr
 }
 
 func (s *httpRouteSyncer) SyncToVirtual(ctx *synccontext.SyncContext, event *synccontext.SyncToVirtualEvent[*gatewayv1.HTTPRoute]) (ctrl.Result, error) {

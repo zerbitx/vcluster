@@ -11,9 +11,12 @@ import (
 	testingutil "github.com/loft-sh/vcluster/pkg/util/testing"
 	"github.com/loft-sh/vcluster/pkg/util/translate"
 	"gotest.tools/assert"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
@@ -21,6 +24,7 @@ import (
 const (
 	testRouteName        = "testroute"
 	testRouteNamespace   = "test"
+	testParentNamespace  = "gateway-ns"
 	testGatewayName      = "testgateway"
 	testServiceName      = "testservice"
 	testMirrorService    = "mirrorservice"
@@ -44,8 +48,9 @@ func TestSync(t *testing.T) {
 
 	syncertesting.RunTestsWithContext(t, newHTTPRouteRegisterContext, []*syncertesting.SyncTest{
 		{
-			Name:                "Create forward",
-			InitialVirtualState: []runtime.Object{baseRoute.DeepCopy()},
+			Name:                 "Create forward",
+			InitialVirtualState:  []runtime.Object{baseRoute.DeepCopy()},
+			InitialPhysicalState: hostRefObjects(testRouteNamespace),
 			ExpectedVirtualState: map[schema.GroupVersionKind][]runtime.Object{
 				mappings.HTTPRoutes(): {baseRoute.DeepCopy()},
 			},
@@ -61,7 +66,7 @@ func TestSync(t *testing.T) {
 		{
 			Name:                 "Update forward and status back",
 			InitialVirtualState:  []runtime.Object{baseRoute.DeepCopy(), virtualGateway()},
-			InitialPhysicalState: []runtime.Object{hostRouteWithStatus.DeepCopy()},
+			InitialPhysicalState: append([]runtime.Object{hostRouteWithStatus.DeepCopy()}, hostRefObjects(testRouteNamespace)...),
 			ExpectedVirtualState: map[schema.GroupVersionKind][]runtime.Object{
 				mappings.HTTPRoutes(): {expectedVirtualRouteWithStatus.DeepCopy()},
 			},
@@ -80,6 +85,81 @@ func TestSync(t *testing.T) {
 			},
 		},
 	})
+}
+
+func TestSyncRejectsUnsyncedParentGateway(t *testing.T) {
+	vRoute := httpRoute(virtualRouteMeta(), routeSpec())
+	syncCtx, syncer := startHTTPRouteSyncer(t, hostServiceObjects(testRouteNamespace), []runtime.Object{vRoute}, nil)
+
+	_, err := syncer.SyncToHost(syncCtx, synccontext.NewSyncToHostEvent(vRoute.DeepCopy()))
+	assert.ErrorContains(t, err, `referenced Gateway "testgateway" in namespace "test" has no synced host object`)
+
+	storedHostRoute := &gatewayv1.HTTPRoute{}
+	err = syncCtx.HostClient.Get(syncCtx, types.NamespacedName{Name: hostName(testRouteName), Namespace: hostNamespace(testRouteNamespace)}, storedHostRoute)
+	assert.Assert(t, apierrors.IsNotFound(err))
+}
+
+func TestSyncContinuesWhenStatusTranslationFails(t *testing.T) {
+	vRoute := httpRoute(virtualRouteMeta(), routeSpec())
+	pRoute := httpRoute(hostRouteMeta(), gatewayv1.HTTPRouteSpec{}, withStatus(gatewayv1.HTTPRouteStatus{
+		RouteStatus: gatewayv1.RouteStatus{
+			Parents: []gatewayv1.RouteParentStatus{
+				{
+					ParentRef:      gatewayv1.ParentReference{Name: gatewayv1.ObjectName(hostName("missing-gateway"))},
+					ControllerName: testControllerName,
+				},
+			},
+		},
+	}))
+	syncCtx, syncer := startHTTPRouteSyncer(
+		t,
+		append([]runtime.Object{pRoute.DeepCopy()}, hostRefObjects(testRouteNamespace)...),
+		[]runtime.Object{vRoute.DeepCopy()},
+		nil,
+	)
+
+	pRoute.ResourceVersion = "999"
+	vRoute.ResourceVersion = "999"
+	_, err := syncer.Sync(syncCtx, synccontext.NewSyncEventWithOld(pRoute.DeepCopy(), pRoute.DeepCopy(), vRoute.DeepCopy(), vRoute.DeepCopy()))
+	assert.ErrorContains(t, err, `failed to translate status`)
+
+	storedHostRoute := &gatewayv1.HTTPRoute{}
+	err = syncCtx.HostClient.Get(syncCtx, types.NamespacedName{Name: pRoute.Name, Namespace: pRoute.Namespace}, storedHostRoute)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, storedHostRoute.Spec, hostRouteSpec())
+}
+
+func TestSyncCrossNamespaceParentRef(t *testing.T) {
+	vRoute := httpRoute(virtualRouteMeta(), routeSpecWithParentNamespace(testParentNamespace))
+	pRoute := httpRoute(hostRouteMeta(), hostRouteSpecWithParentNamespace(testParentNamespace), withStatus(hostRouteStatusForNamespace(testParentNamespace, false)))
+	syncCtx, syncer := startHTTPRouteSyncer(
+		t,
+		append([]runtime.Object{pRoute.DeepCopy()}, hostRefObjects(testRouteNamespace, testParentNamespace)...),
+		[]runtime.Object{vRoute.DeepCopy(), virtualGatewayWithNamespace(testParentNamespace)},
+		nil,
+	)
+
+	_, err := syncer.SyncToHost(syncCtx, synccontext.NewSyncToHostEvent(vRoute.DeepCopy()))
+	assert.NilError(t, err)
+
+	storedHostRoute := &gatewayv1.HTTPRoute{}
+	err = syncCtx.HostClient.Get(syncCtx, types.NamespacedName{Name: hostName(testRouteName), Namespace: hostNamespace(testRouteNamespace)}, storedHostRoute)
+	assert.NilError(t, err)
+	assert.Equal(t, string(storedHostRoute.Spec.ParentRefs[0].Name), hostNameForNamespace(testGatewayName, testParentNamespace))
+	assert.Assert(t, storedHostRoute.Spec.ParentRefs[0].Namespace != nil)
+	assert.Equal(t, string(*storedHostRoute.Spec.ParentRefs[0].Namespace), hostNamespace(testParentNamespace))
+
+	pRoute.ResourceVersion = "999"
+	vRoute.ResourceVersion = "999"
+	_, err = syncer.Sync(syncCtx, synccontext.NewSyncEventWithOld(pRoute.DeepCopy(), pRoute.DeepCopy(), vRoute.DeepCopy(), vRoute.DeepCopy()))
+	assert.NilError(t, err)
+
+	storedVirtualRoute := &gatewayv1.HTTPRoute{}
+	err = syncCtx.VirtualClient.Get(syncCtx, types.NamespacedName{Name: vRoute.Name, Namespace: vRoute.Namespace}, storedVirtualRoute)
+	assert.NilError(t, err)
+	assert.Equal(t, string(storedVirtualRoute.Status.Parents[0].ParentRef.Name), testGatewayName)
+	assert.Assert(t, storedVirtualRoute.Status.Parents[0].ParentRef.Namespace != nil)
+	assert.Equal(t, string(*storedVirtualRoute.Status.Parents[0].ParentRef.Namespace), testParentNamespace)
 }
 
 func TestSyncRejectsUnsupportedRefs(t *testing.T) {
@@ -131,7 +211,7 @@ func TestSyncRejectsUnsupportedRefs(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			syncCtx, syncer := startHTTPRouteSyncer(t, nil, []runtime.Object{tc.route}, nil)
+			syncCtx, syncer := startHTTPRouteSyncer(t, hostRefObjects(testRouteNamespace), []runtime.Object{tc.route}, nil)
 			_, err := syncer.SyncToHost(syncCtx, synccontext.NewSyncToHostEvent(tc.route.DeepCopy()))
 			assert.ErrorContains(t, err, tc.expectedErr)
 		})
@@ -183,10 +263,19 @@ func httpRoute(meta metav1.ObjectMeta, spec gatewayv1.HTTPRouteSpec, opts ...htt
 }
 
 func routeSpec() gatewayv1.HTTPRouteSpec {
+	return routeSpecWithParentNamespace("")
+}
+
+func routeSpecWithParentNamespace(parentNamespace string) gatewayv1.HTTPRouteSpec {
+	parentRef := gatewayv1.ParentReference{Name: gatewayv1.ObjectName(testGatewayName)}
+	if parentNamespace != "" {
+		parentRef.Namespace = ptr.To(gatewayv1.Namespace(parentNamespace))
+	}
+
 	return gatewayv1.HTTPRouteSpec{
 		CommonRouteSpec: gatewayv1.CommonRouteSpec{
 			ParentRefs: []gatewayv1.ParentReference{
-				{Name: gatewayv1.ObjectName(testGatewayName)},
+				parentRef,
 			},
 		},
 		Hostnames: []gatewayv1.Hostname{"example.com"},
@@ -205,14 +294,29 @@ func routeSpec() gatewayv1.HTTPRouteSpec {
 }
 
 func hostRouteSpec() gatewayv1.HTTPRouteSpec {
-	spec := routeSpec()
+	return hostRouteSpecWithParentNamespace("")
+}
+
+func hostRouteSpecWithParentNamespace(parentNamespace string) gatewayv1.HTTPRouteSpec {
+	spec := routeSpecWithParentNamespace(parentNamespace)
 	ret := *spec.DeepCopy()
-	ret.ParentRefs[0].Name = gatewayv1.ObjectName(hostName(testGatewayName))
+	ret.ParentRefs[0].Name = gatewayv1.ObjectName(hostNameForNamespace(testGatewayName, refNamespaceOrDefault(parentNamespace, testRouteNamespace)))
+	if parentNamespace != "" {
+		ret.ParentRefs[0].Namespace = ptr.To(gatewayv1.Namespace(hostNamespace(parentNamespace)))
+	}
 	ret.Rules[0].BackendRefs[0].Name = gatewayv1.ObjectName(hostName(testServiceName))
 	ret.Rules[0].BackendRefs[0].Filters[0].RequestMirror.BackendRef.Name = gatewayv1.ObjectName(hostName(testMirrorService))
 	ret.Rules[0].Filters[0].RequestMirror.BackendRef.Name = gatewayv1.ObjectName(hostName(testMirrorService))
 	ret.Rules[0].Filters[1].ExternalAuth.BackendRef.Name = gatewayv1.ObjectName(hostName(testAuthService))
 	return ret
+}
+
+func refNamespaceOrDefault(namespace, defaultNamespace string) string {
+	if namespace == "" {
+		return defaultNamespace
+	}
+
+	return namespace
 }
 
 type backendRefOption func(*gatewayv1.HTTPBackendRef)
@@ -266,15 +370,25 @@ func externalAuthFilter(serviceName string) gatewayv1.HTTPRouteFilter {
 func virtualRouteStatus() gatewayv1.HTTPRouteStatus {
 	status := hostRouteStatus()
 	status.Parents[0].ParentRef.Name = gatewayv1.ObjectName(testGatewayName)
+	status.Parents[0].ParentRef.Namespace = nil
 	return status
 }
 
 func hostRouteStatus() gatewayv1.HTTPRouteStatus {
+	return hostRouteStatusForNamespace(testRouteNamespace, true)
+}
+
+func hostRouteStatusForNamespace(parentNamespace string, includeNamespace bool) gatewayv1.HTTPRouteStatus {
+	parentRef := gatewayv1.ParentReference{Name: gatewayv1.ObjectName(hostNameForNamespace(testGatewayName, parentNamespace))}
+	if includeNamespace {
+		parentRef.Namespace = ptr.To(gatewayv1.Namespace(hostNamespace(parentNamespace)))
+	}
+
 	return gatewayv1.HTTPRouteStatus{
 		RouteStatus: gatewayv1.RouteStatus{
 			Parents: []gatewayv1.RouteParentStatus{
 				{
-					ParentRef:      gatewayv1.ParentReference{Name: gatewayv1.ObjectName(hostName(testGatewayName))},
+					ParentRef:      parentRef,
 					ControllerName: testControllerName,
 					Conditions: []metav1.Condition{
 						{
@@ -318,14 +432,65 @@ func hostRouteMeta() metav1.ObjectMeta {
 }
 
 func hostName(name string) string {
-	return translate.Default.HostName(nil, name, testRouteNamespace).Name
+	return hostNameForNamespace(name, testRouteNamespace)
+}
+
+func hostNameForNamespace(name, namespace string) string {
+	return translate.SingleNamespaceHostName(name, namespace, translate.VClusterName)
+}
+
+func hostNamespace(namespace string) string {
+	if namespace == "" {
+		return ""
+	}
+
+	return testingutil.DefaultTestTargetNamespace
 }
 
 func virtualGateway() *gatewayv1.Gateway {
+	return virtualGatewayWithNamespace(testRouteNamespace)
+}
+
+func virtualGatewayWithNamespace(namespace string) *gatewayv1.Gateway {
 	return &gatewayv1.Gateway{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      testGatewayName,
-			Namespace: testRouteNamespace,
+			Namespace: namespace,
 		},
 	}
+}
+
+func hostRefObjects(namespaces ...string) []runtime.Object {
+	ret := hostServiceObjects(testRouteNamespace)
+	for _, namespace := range namespaces {
+		ret = append(ret, hostGateway(namespace))
+	}
+	return ret
+}
+
+func hostServiceObjects(namespace string) []runtime.Object {
+	return []runtime.Object{
+		hostService(testServiceName, namespace),
+		hostService(testMirrorService, namespace),
+		hostService(testAuthService, namespace),
+	}
+}
+
+func hostGateway(namespace string) *gatewayv1.Gateway {
+	return translate.HostMetadata(virtualGatewayWithNamespace(namespace), types.NamespacedName{
+		Name:      hostNameForNamespace(testGatewayName, namespace),
+		Namespace: hostNamespace(namespace),
+	})
+}
+
+func hostService(name, namespace string) *corev1.Service {
+	return translate.HostMetadata(&corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+	}, types.NamespacedName{
+		Name:      hostNameForNamespace(name, namespace),
+		Namespace: hostNamespace(namespace),
+	})
 }
