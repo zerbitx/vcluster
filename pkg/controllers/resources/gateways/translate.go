@@ -3,7 +3,7 @@ package gateways
 import (
 	"fmt"
 
-	"github.com/loft-sh/vcluster/pkg/controllers/resources/gatewayroutes"
+	routetranslate "github.com/loft-sh/vcluster/pkg/controllers/resources/gatewayroutes/translate"
 	"github.com/loft-sh/vcluster/pkg/syncer/synccontext"
 	"github.com/loft-sh/vcluster/pkg/util/translate"
 	"k8s.io/apimachinery/pkg/types"
@@ -27,7 +27,7 @@ func translateListeners(ctx *synccontext.SyncContext, vGateway *gatewayv1.Gatewa
 	for i := range retSpec.Listeners {
 		if tls := retSpec.Listeners[i].TLS; tls != nil {
 			for j := range tls.CertificateRefs {
-				err := gatewayroutes.TranslateSecretObjectRefToHost(ctx, vGateway.Namespace, &retSpec.Listeners[i].TLS.CertificateRefs[j])
+				err := routetranslate.SecretObjectRefToHost(ctx, vGateway.Namespace, &retSpec.Listeners[i].TLS.CertificateRefs[j])
 				if err != nil {
 					return nil, fmt.Errorf("translate listeners[%d].tls.certificateRefs[%d]: %w", i, j, err)
 				}

@@ -3,7 +3,7 @@ package httproutes
 import (
 	"fmt"
 
-	"github.com/loft-sh/vcluster/pkg/controllers/resources/gatewayroutes"
+	routetranslate "github.com/loft-sh/vcluster/pkg/controllers/resources/gatewayroutes/translate"
 	"github.com/loft-sh/vcluster/pkg/syncer/synccontext"
 	"github.com/loft-sh/vcluster/pkg/util/translate"
 	"k8s.io/apimachinery/pkg/types"
@@ -46,8 +46,8 @@ func translateStatusToVirtual(ctx *synccontext.SyncContext, hostRoute *gatewayv1
 	retStatus := *status.DeepCopy()
 
 	for i := range retStatus.Parents {
-		hostRouteNamespace := gatewayroutes.ParentStatusHostNamespace(hostRoute.Namespace, hostRoute.Spec.ParentRefs, retStatus.Parents[i].ParentRef)
-		err := gatewayroutes.TranslateParentRefToVirtual(ctx, hostRouteNamespace, virtualRouteNamespace, &retStatus.Parents[i].ParentRef)
+		hostRouteNamespace := routetranslate.ParentStatusHostNamespace(hostRoute.Namespace, hostRoute.Spec.ParentRefs, retStatus.Parents[i].ParentRef)
+		err := routetranslate.ParentRefToVirtual(ctx, hostRouteNamespace, virtualRouteNamespace, &retStatus.Parents[i].ParentRef)
 		if err != nil {
 			return gatewayv1.HTTPRouteStatus{}, fmt.Errorf("translate parents[%d].parentRef: %w", i, err)
 		}
@@ -92,18 +92,18 @@ func translateHTTPBackendRefToHost(ctx *synccontext.SyncContext, routeNamespace 
 
 func translateParentRefToHost(ctx *synccontext.SyncContext, routeNamespace string, ref *gatewayv1.ParentReference, validateRef bool) error {
 	if validateRef {
-		return gatewayroutes.TranslateParentRefToHost(ctx, routeNamespace, ref)
+		return routetranslate.ParentRefToHost(ctx, routeNamespace, ref)
 	}
 
-	return gatewayroutes.TranslateParentRefToHostWithoutValidation(ctx, routeNamespace, ref)
+	return routetranslate.ParentRefToHostWithoutValidation(ctx, routeNamespace, ref)
 }
 
 func translateBackendObjectRefToHost(ctx *synccontext.SyncContext, routeNamespace string, ref *gatewayv1.BackendObjectReference, validateRef bool) error {
 	if validateRef {
-		return gatewayroutes.TranslateBackendObjectRefToHost(ctx, routeNamespace, ref)
+		return routetranslate.BackendObjectRefToHost(ctx, routeNamespace, ref)
 	}
 
-	return gatewayroutes.TranslateBackendObjectRefToHostWithoutValidation(ctx, routeNamespace, ref)
+	return routetranslate.BackendObjectRefToHostWithoutValidation(ctx, routeNamespace, ref)
 }
 
 func translateFilterToHost(ctx *synccontext.SyncContext, routeNamespace string, filter *gatewayv1.HTTPRouteFilter, validateRefs bool) error {

@@ -3,7 +3,7 @@ package backendtlspolicies
 import (
 	"fmt"
 
-	"github.com/loft-sh/vcluster/pkg/controllers/resources/gatewayroutes"
+	routetranslate "github.com/loft-sh/vcluster/pkg/controllers/resources/gatewayroutes/translate"
 	"github.com/loft-sh/vcluster/pkg/mappings"
 	"github.com/loft-sh/vcluster/pkg/patcher"
 	"github.com/loft-sh/vcluster/pkg/pro"
@@ -59,7 +59,7 @@ func (s *backendTLSPolicySyncer) Options() *syncertypes.Options {
 }
 
 func (s *backendTLSPolicySyncer) ModifyController(ctx *synccontext.RegisterContext, builder *builder.Builder) (*builder.Builder, error) {
-	return gatewayroutes.ModifyControllerForReferencedObjects(ctx, builder, s.GroupVersionKind(), mappings.Services(), mappings.ConfigMaps())
+	return routetranslate.RegisterReferencedWatches(ctx, builder, s.GroupVersionKind(), mappings.Services(), mappings.ConfigMaps())
 }
 
 func (s *backendTLSPolicySyncer) SyncToHost(ctx *synccontext.SyncContext, event *synccontext.SyncToHostEvent[*gatewayv1.BackendTLSPolicy]) (ctrl.Result, error) {

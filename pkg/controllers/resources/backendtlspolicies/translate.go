@@ -3,7 +3,7 @@ package backendtlspolicies
 import (
 	"fmt"
 
-	"github.com/loft-sh/vcluster/pkg/controllers/resources/gatewayroutes"
+	routetranslate "github.com/loft-sh/vcluster/pkg/controllers/resources/gatewayroutes/translate"
 	"github.com/loft-sh/vcluster/pkg/syncer/synccontext"
 	"github.com/loft-sh/vcluster/pkg/util/translate"
 	"k8s.io/apimachinery/pkg/types"
@@ -46,7 +46,7 @@ func translateStatusToVirtual(ctx *synccontext.SyncContext, hostPolicy *gatewayv
 	retStatus := *status.DeepCopy()
 
 	for i := range retStatus.Ancestors {
-		err := gatewayroutes.TranslateParentRefToVirtual(ctx, hostPolicy.Namespace, virtualPolicyNamespace, &retStatus.Ancestors[i].AncestorRef)
+		err := routetranslate.ParentRefToVirtual(ctx, hostPolicy.Namespace, virtualPolicyNamespace, &retStatus.Ancestors[i].AncestorRef)
 		if err != nil {
 			return gatewayv1.PolicyStatus{}, fmt.Errorf("translate ancestors[%d].ancestorRef: %w", i, err)
 		}
@@ -57,16 +57,16 @@ func translateStatusToVirtual(ctx *synccontext.SyncContext, hostPolicy *gatewayv
 
 func translatePolicyTargetRefToHost(ctx *synccontext.SyncContext, policyNamespace string, ref *gatewayv1.LocalPolicyTargetReferenceWithSectionName, validateRef bool) error {
 	if validateRef {
-		return gatewayroutes.TranslatePolicyTargetRefToHost(ctx, policyNamespace, ref)
+		return routetranslate.PolicyTargetRefToHost(ctx, policyNamespace, ref)
 	}
 
-	return gatewayroutes.TranslatePolicyTargetRefToHostWithoutValidation(ctx, policyNamespace, ref)
+	return routetranslate.PolicyTargetRefToHostWithoutValidation(ctx, policyNamespace, ref)
 }
 
 func translateLocalObjectRefToHost(ctx *synccontext.SyncContext, policyNamespace string, ref *gatewayv1.LocalObjectReference, validateRef bool) error {
 	if validateRef {
-		return gatewayroutes.TranslateLocalObjectRefToHost(ctx, policyNamespace, ref)
+		return routetranslate.LocalObjectRefToHost(ctx, policyNamespace, ref)
 	}
 
-	return gatewayroutes.TranslateLocalObjectRefToHostWithoutValidation(ctx, policyNamespace, ref)
+	return routetranslate.LocalObjectRefToHostWithoutValidation(ctx, policyNamespace, ref)
 }
