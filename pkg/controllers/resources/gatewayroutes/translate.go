@@ -78,6 +78,69 @@ func TranslateBackendObjectRefToHostWithoutValidation(ctx *synccontext.SyncConte
 	return translateBackendObjectRefToHost(ctx, routeNamespace, ref, false)
 }
 
+func TranslateSecretObjectRefToHost(ctx *synccontext.SyncContext, localNamespace string, ref *gatewayv1.SecretObjectReference) error {
+	return translateSecretObjectRefToHost(ctx, localNamespace, ref, true)
+}
+
+func TranslateSecretObjectRefToHostWithoutValidation(ctx *synccontext.SyncContext, localNamespace string, ref *gatewayv1.SecretObjectReference) error {
+	return translateSecretObjectRefToHost(ctx, localNamespace, ref, false)
+}
+
+func TranslateSecretObjectRefToVirtual(ctx *synccontext.SyncContext, hostLocalNamespace, virtualLocalNamespace string, ref *gatewayv1.SecretObjectReference) error {
+	gvk, err := secretObjectReferenceGVK(ref)
+	if err != nil {
+		return err
+	}
+
+	virtualName, err := translateRefToVirtual(ctx, hostLocalNamespace, ref.Name, ref.Namespace, gvk)
+	if err != nil {
+		return err
+	}
+
+	ref.Name = gatewayv1.ObjectName(virtualName.Name)
+	if virtualName.Namespace != virtualLocalNamespace {
+		ref.Namespace = ptr.To(gatewayv1.Namespace(virtualName.Namespace))
+	} else {
+		ref.Namespace = nil
+	}
+
+	return nil
+}
+
+func TranslateLocalObjectRefToHost(ctx *synccontext.SyncContext, localNamespace string, ref *gatewayv1.LocalObjectReference) error {
+	return translateLocalObjectRefToHost(ctx, localNamespace, ref, true)
+}
+
+func TranslateLocalObjectRefToHostWithoutValidation(ctx *synccontext.SyncContext, localNamespace string, ref *gatewayv1.LocalObjectReference) error {
+	return translateLocalObjectRefToHost(ctx, localNamespace, ref, false)
+}
+
+func TranslateLocalObjectRefToVirtual(ctx *synccontext.SyncContext, hostLocalNamespace, virtualLocalNamespace string, ref *gatewayv1.LocalObjectReference) error {
+	gvk, err := localObjectReferenceGVK(ref)
+	if err != nil {
+		return err
+	}
+
+	virtualName, err := translateRefToVirtual(ctx, hostLocalNamespace, ref.Name, nil, gvk)
+	if err != nil {
+		return err
+	}
+	if virtualName.Namespace != virtualLocalNamespace {
+		return fmt.Errorf("translated local %s %q to non-local namespace %q", gvk.Kind, ref.Name, virtualName.Namespace)
+	}
+
+	ref.Name = gatewayv1.ObjectName(virtualName.Name)
+	return nil
+}
+
+func TranslatePolicyTargetRefToHost(ctx *synccontext.SyncContext, policyNamespace string, ref *gatewayv1.LocalPolicyTargetReferenceWithSectionName) error {
+	return translatePolicyTargetRefToHost(ctx, policyNamespace, ref, true)
+}
+
+func TranslatePolicyTargetRefToHostWithoutValidation(ctx *synccontext.SyncContext, policyNamespace string, ref *gatewayv1.LocalPolicyTargetReferenceWithSectionName) error {
+	return translatePolicyTargetRefToHost(ctx, policyNamespace, ref, false)
+}
+
 func translateBackendObjectRefToHost(ctx *synccontext.SyncContext, routeNamespace string, ref *gatewayv1.BackendObjectReference, validateHostObject bool) error {
 	gvk, err := backendReferenceGVK(ref)
 	if err != nil {
@@ -94,6 +157,55 @@ func translateBackendObjectRefToHost(ctx *synccontext.SyncContext, routeNamespac
 		ref.Namespace = ptr.To(gatewayv1.Namespace(hostName.Namespace))
 	}
 
+	return nil
+}
+
+func translateSecretObjectRefToHost(ctx *synccontext.SyncContext, localNamespace string, ref *gatewayv1.SecretObjectReference, validateHostObject bool) error {
+	gvk, err := secretObjectReferenceGVK(ref)
+	if err != nil {
+		return err
+	}
+
+	hostName, err := translateRefToHost(ctx, localNamespace, ref.Name, ref.Namespace, gvk, validateHostObject)
+	if err != nil {
+		return err
+	}
+
+	ref.Name = gatewayv1.ObjectName(hostName.Name)
+	if ref.Namespace != nil {
+		ref.Namespace = ptr.To(gatewayv1.Namespace(hostName.Namespace))
+	}
+
+	return nil
+}
+
+func translateLocalObjectRefToHost(ctx *synccontext.SyncContext, localNamespace string, ref *gatewayv1.LocalObjectReference, validateHostObject bool) error {
+	gvk, err := localObjectReferenceGVK(ref)
+	if err != nil {
+		return err
+	}
+
+	hostName, err := translateRefToHost(ctx, localNamespace, ref.Name, nil, gvk, validateHostObject)
+	if err != nil {
+		return err
+	}
+
+	ref.Name = gatewayv1.ObjectName(hostName.Name)
+	return nil
+}
+
+func translatePolicyTargetRefToHost(ctx *synccontext.SyncContext, policyNamespace string, ref *gatewayv1.LocalPolicyTargetReferenceWithSectionName, validateHostObject bool) error {
+	gvk, err := policyTargetReferenceGVK(ref)
+	if err != nil {
+		return err
+	}
+
+	hostName, err := translateRefToHost(ctx, policyNamespace, ref.Name, nil, gvk, validateHostObject)
+	if err != nil {
+		return err
+	}
+
+	ref.Name = gatewayv1.ObjectName(hostName.Name)
 	return nil
 }
 
@@ -307,4 +419,44 @@ func backendReferenceGVK(ref *gatewayv1.BackendObjectReference) (schema.GroupVer
 	}
 
 	return schema.GroupVersionKind{}, fmt.Errorf("backendRef group %q kind %q is not supported", group, kind)
+}
+
+func secretObjectReferenceGVK(ref *gatewayv1.SecretObjectReference) (schema.GroupVersionKind, error) {
+	group := corev1.GroupName
+	if ref.Group != nil {
+		group = string(*ref.Group)
+	}
+
+	kind := "Secret"
+	if ref.Kind != nil {
+		kind = string(*ref.Kind)
+	}
+
+	if group == corev1.GroupName && kind == "Secret" {
+		return mappings.Secrets(), nil
+	}
+
+	return schema.GroupVersionKind{}, fmt.Errorf("secretRef group %q kind %q is not supported", group, kind)
+}
+
+func localObjectReferenceGVK(ref *gatewayv1.LocalObjectReference) (schema.GroupVersionKind, error) {
+	group := string(ref.Group)
+	kind := string(ref.Kind)
+
+	if group == corev1.GroupName && kind == "ConfigMap" {
+		return mappings.ConfigMaps(), nil
+	}
+
+	return schema.GroupVersionKind{}, fmt.Errorf("localObjectRef group %q kind %q is not supported", group, kind)
+}
+
+func policyTargetReferenceGVK(ref *gatewayv1.LocalPolicyTargetReferenceWithSectionName) (schema.GroupVersionKind, error) {
+	group := string(ref.Group)
+	kind := string(ref.Kind)
+
+	if group == corev1.GroupName && kind == "Service" {
+		return mappings.Services(), nil
+	}
+
+	return schema.GroupVersionKind{}, fmt.Errorf("targetRef group %q kind %q is not supported", group, kind)
 }

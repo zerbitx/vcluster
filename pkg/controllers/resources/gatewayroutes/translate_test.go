@@ -51,6 +51,50 @@ func TestTranslateParentRefToVirtualSupportsService(t *testing.T) {
 	assert.Assert(t, ref.Namespace == nil)
 }
 
+func TestTranslateSecretObjectRefToHost(t *testing.T) {
+	syncCtx, _ := newGatewayRouteTestContext(t, []runtime.Object{
+		managedHostSecret("tls-cert", testRouteNamespace),
+	}, nil)
+	ref := gatewayv1.SecretObjectReference{Name: gatewayv1.ObjectName("tls-cert")}
+
+	err := TranslateSecretObjectRefToHost(syncCtx, testRouteNamespace, &ref)
+	assert.NilError(t, err)
+	assert.Equal(t, string(ref.Name), hostName("tls-cert", testRouteNamespace))
+	assert.Assert(t, ref.Namespace == nil)
+}
+
+func TestTranslateLocalObjectRefToHost(t *testing.T) {
+	syncCtx, _ := newGatewayRouteTestContext(t, []runtime.Object{
+		managedHostConfigMap("ca-bundle", testRouteNamespace),
+	}, nil)
+	ref := gatewayv1.LocalObjectReference{
+		Group: gatewayv1.Group(corev1.GroupName),
+		Kind:  gatewayv1.Kind("ConfigMap"),
+		Name:  gatewayv1.ObjectName("ca-bundle"),
+	}
+
+	err := TranslateLocalObjectRefToHost(syncCtx, testRouteNamespace, &ref)
+	assert.NilError(t, err)
+	assert.Equal(t, string(ref.Name), hostName("ca-bundle", testRouteNamespace))
+}
+
+func TestTranslatePolicyTargetRefToHost(t *testing.T) {
+	syncCtx, _ := newGatewayRouteTestContext(t, []runtime.Object{
+		managedHostService(testServiceName, testRouteNamespace),
+	}, nil)
+	ref := gatewayv1.LocalPolicyTargetReferenceWithSectionName{
+		LocalPolicyTargetReference: gatewayv1.LocalPolicyTargetReference{
+			Group: gatewayv1.Group(corev1.GroupName),
+			Kind:  gatewayv1.Kind("Service"),
+			Name:  gatewayv1.ObjectName(testServiceName),
+		},
+	}
+
+	err := TranslatePolicyTargetRefToHost(syncCtx, testRouteNamespace, &ref)
+	assert.NilError(t, err)
+	assert.Equal(t, string(ref.Name), hostName(testServiceName, testRouteNamespace))
+}
+
 func TestTranslateParentRefToHostRejectsObjectWhenManagedChecksDisagree(t *testing.T) {
 	syncCtx, _ := newGatewayRouteTestContext(t, []runtime.Object{
 		bareHostService(testServiceName, testRouteNamespace),
@@ -166,6 +210,30 @@ func serviceParentRef(name string) gatewayv1.ParentReference {
 
 func managedHostService(name, namespace string) *corev1.Service {
 	return translate.HostMetadata(virtualService(name, namespace), types.NamespacedName{
+		Name:      hostName(name, namespace),
+		Namespace: hostNamespace(namespace),
+	})
+}
+
+func managedHostSecret(name, namespace string) *corev1.Secret {
+	return translate.HostMetadata(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+	}, types.NamespacedName{
+		Name:      hostName(name, namespace),
+		Namespace: hostNamespace(namespace),
+	})
+}
+
+func managedHostConfigMap(name, namespace string) *corev1.ConfigMap {
+	return translate.HostMetadata(&corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+	}, types.NamespacedName{
 		Name:      hostName(name, namespace),
 		Namespace: hostNamespace(namespace),
 	})
