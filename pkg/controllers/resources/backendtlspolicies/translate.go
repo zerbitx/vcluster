@@ -42,6 +42,19 @@ func translateSpecToHost(ctx *synccontext.SyncContext, vPolicy *gatewayv1.Backen
 	return retSpec, nil
 }
 
+func translateStatusToVirtual(ctx *synccontext.SyncContext, hostPolicy *gatewayv1.BackendTLSPolicy, virtualPolicyNamespace string, status gatewayv1.PolicyStatus) (gatewayv1.PolicyStatus, error) {
+	retStatus := *status.DeepCopy()
+
+	for i := range retStatus.Ancestors {
+		err := gatewayroutes.TranslateParentRefToVirtual(ctx, hostPolicy.Namespace, virtualPolicyNamespace, &retStatus.Ancestors[i].AncestorRef)
+		if err != nil {
+			return gatewayv1.PolicyStatus{}, fmt.Errorf("translate ancestors[%d].ancestorRef: %w", i, err)
+		}
+	}
+
+	return retStatus, nil
+}
+
 func translatePolicyTargetRefToHost(ctx *synccontext.SyncContext, policyNamespace string, ref *gatewayv1.LocalPolicyTargetReferenceWithSectionName, validateRef bool) error {
 	if validateRef {
 		return gatewayroutes.TranslatePolicyTargetRefToHost(ctx, policyNamespace, ref)

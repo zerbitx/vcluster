@@ -101,12 +101,17 @@ func (s *backendTLSPolicySyncer) Sync(ctx *synccontext.SyncContext, event *syncc
 		}
 	}()
 
-	event.Virtual.Status = event.Host.Status
+	vStatus, err := translateStatusToVirtual(ctx, event.Host, event.Virtual.Namespace, event.Host.Status)
+	if err != nil {
+		retErr = fmt.Errorf("failed to translate status: %w", err)
+	} else {
+		event.Virtual.Status = vStatus
+	}
 	event.Virtual.Labels, event.Host.Labels = translate.LabelsBidirectionalUpdate(event)
 	event.Virtual.Annotations, event.Host.Annotations = translate.AnnotationsBidirectionalUpdate(event)
 	event.Host.Spec = *hSpec
 
-	return ctrl.Result{}, nil
+	return ctrl.Result{}, retErr
 }
 
 func (s *backendTLSPolicySyncer) SyncToVirtual(ctx *synccontext.SyncContext, event *synccontext.SyncToVirtualEvent[*gatewayv1.BackendTLSPolicy]) (ctrl.Result, error) {

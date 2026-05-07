@@ -23,6 +23,7 @@ const (
 	testPolicyNamespace = "test"
 	testServiceName     = "testservice"
 	testConfigMapName   = "ca-bundle"
+	testGatewayName     = "testgateway"
 	testControllerName  = gatewayv1.GatewayController("example.com/gateway-controller")
 )
 
@@ -31,7 +32,8 @@ func TestSync(t *testing.T) {
 	syncCtx, syncer := startBackendTLSPolicySyncer(t, []runtime.Object{
 		managedHostService(testServiceName, testPolicyNamespace),
 		managedHostConfigMap(testConfigMapName, testPolicyNamespace),
-	}, []runtime.Object{vPolicy.DeepCopy()})
+		hostGateway(testGatewayName, testPolicyNamespace),
+	}, []runtime.Object{vPolicy.DeepCopy(), virtualGateway(testGatewayName, testPolicyNamespace)})
 
 	_, err := syncer.SyncToHost(syncCtx, synccontext.NewSyncToHostEvent(vPolicy.DeepCopy()))
 	assert.NilError(t, err)
@@ -42,7 +44,8 @@ func TestSync(t *testing.T) {
 	assert.NilError(t, err)
 	assert.DeepEqual(t, storedHost.Spec, hostBackendTLSPolicySpec())
 
-	hostStatus := backendTLSPolicyStatus()
+	hostStatus := hostBackendTLSPolicyStatus()
+	virtualStatus := virtualBackendTLSPolicyStatus()
 	storedHost.Status = hostStatus
 	storedHost.ResourceVersion = "999"
 	vPolicy.ResourceVersion = "999"
@@ -53,9 +56,36 @@ func TestSync(t *testing.T) {
 	storedVirtual := &gatewayv1.BackendTLSPolicy{}
 	err = syncCtx.VirtualClient.Get(syncCtx, types.NamespacedName{Name: vPolicy.Name, Namespace: vPolicy.Namespace}, storedVirtual)
 	assert.NilError(t, err)
-	assert.DeepEqual(t, storedVirtual.Status, hostStatus)
+	assert.DeepEqual(t, storedVirtual.Status, virtualStatus)
 
 	err = syncCtx.HostClient.Get(syncCtx, pName, storedHost)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, storedHost.Spec, hostBackendTLSPolicySpec())
+}
+
+func TestSyncContinuesWhenStatusTranslationFails(t *testing.T) {
+	vPolicy := backendTLSPolicy(virtualPolicyMeta(), backendTLSPolicySpec())
+	pPolicy := backendTLSPolicy(hostPolicyMeta(), gatewayv1.BackendTLSPolicySpec{}, withStatus(gatewayv1.PolicyStatus{
+		Ancestors: []gatewayv1.PolicyAncestorStatus{
+			{
+				AncestorRef: gatewayv1.ParentReference{
+					Name: gatewayv1.ObjectName(hostName("missing-gateway", testPolicyNamespace)),
+				},
+				ControllerName: testControllerName,
+			},
+		},
+	}))
+	syncCtx, syncer := startBackendTLSPolicySyncer(t, []runtime.Object{
+		pPolicy.DeepCopy(),
+	}, []runtime.Object{vPolicy.DeepCopy()})
+
+	pPolicy.ResourceVersion = "999"
+	vPolicy.ResourceVersion = "999"
+	_, err := syncer.Sync(syncCtx, synccontext.NewSyncEventWithOld(pPolicy.DeepCopy(), pPolicy.DeepCopy(), vPolicy.DeepCopy(), vPolicy.DeepCopy()))
+	assert.ErrorContains(t, err, `failed to translate status`)
+
+	storedHost := &gatewayv1.BackendTLSPolicy{}
+	err = syncCtx.HostClient.Get(syncCtx, types.NamespacedName{Name: pPolicy.Name, Namespace: pPolicy.Namespace}, storedHost)
 	assert.NilError(t, err)
 	assert.DeepEqual(t, storedHost.Spec, hostBackendTLSPolicySpec())
 }
@@ -120,11 +150,43 @@ func newBackendTLSPolicyRegisterContext(vConfig *config.VirtualClusterConfig, pC
 	return syncertesting.NewFakeRegisterContext(vConfig, pClient, vClient)
 }
 
-func backendTLSPolicy(meta metav1.ObjectMeta, spec gatewayv1.BackendTLSPolicySpec) *gatewayv1.BackendTLSPolicy {
-	return &gatewayv1.BackendTLSPolicy{
+func backendTLSPolicy(meta metav1.ObjectMeta, spec gatewayv1.BackendTLSPolicySpec, opts ...backendTLSPolicyOption) *gatewayv1.BackendTLSPolicy {
+	return backendTLSPolicyWithOptions(meta, spec, opts...)
+}
+
+type backendTLSPolicyOption func(*gatewayv1.BackendTLSPolicy)
+
+func withStatus(status gatewayv1.PolicyStatus) backendTLSPolicyOption {
+	return func(policy *gatewayv1.BackendTLSPolicy) {
+		policy.Status = status
+	}
+}
+
+func backendTLSPolicyWithOptions(meta metav1.ObjectMeta, spec gatewayv1.BackendTLSPolicySpec, opts ...backendTLSPolicyOption) *gatewayv1.BackendTLSPolicy {
+	ret := &gatewayv1.BackendTLSPolicy{
 		ObjectMeta: meta,
 		Spec:       spec,
 	}
+	for _, opt := range opts {
+		opt(ret)
+	}
+	return ret
+}
+
+func virtualGateway(name, namespace string) *gatewayv1.Gateway {
+	return &gatewayv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+	}
+}
+
+func hostGateway(name, namespace string) *gatewayv1.Gateway {
+	return translate.HostMetadata(virtualGateway(name, namespace), types.NamespacedName{
+		Name:      hostName(name, namespace),
+		Namespace: hostNamespace(namespace),
+	})
 }
 
 func virtualPolicyMeta() metav1.ObjectMeta {
@@ -210,12 +272,12 @@ func hostNamespace(namespace string) string {
 	return testingutil.DefaultTestTargetNamespace
 }
 
-func backendTLSPolicyStatus() gatewayv1.PolicyStatus {
+func hostBackendTLSPolicyStatus() gatewayv1.PolicyStatus {
 	return gatewayv1.PolicyStatus{
 		Ancestors: []gatewayv1.PolicyAncestorStatus{
 			{
 				AncestorRef: gatewayv1.ParentReference{
-					Name: gatewayv1.ObjectName("host-gateway"),
+					Name: gatewayv1.ObjectName(hostName(testGatewayName, testPolicyNamespace)),
 				},
 				ControllerName: testControllerName,
 				Conditions: []metav1.Condition{
@@ -228,4 +290,10 @@ func backendTLSPolicyStatus() gatewayv1.PolicyStatus {
 			},
 		},
 	}
+}
+
+func virtualBackendTLSPolicyStatus() gatewayv1.PolicyStatus {
+	status := hostBackendTLSPolicyStatus()
+	status.Ancestors[0].AncestorRef.Name = gatewayv1.ObjectName(testGatewayName)
+	return status
 }
