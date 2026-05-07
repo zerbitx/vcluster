@@ -3,6 +3,7 @@ package backendtlspolicies
 import (
 	"fmt"
 
+	"github.com/loft-sh/vcluster/pkg/controllers/resources/gatewayroutes"
 	"github.com/loft-sh/vcluster/pkg/mappings"
 	"github.com/loft-sh/vcluster/pkg/patcher"
 	"github.com/loft-sh/vcluster/pkg/pro"
@@ -14,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
@@ -24,9 +26,10 @@ type backendTLSPolicySyncer struct {
 }
 
 var (
-	_ syncertypes.Object          = &backendTLSPolicySyncer{}
-	_ syncertypes.Syncer          = &backendTLSPolicySyncer{}
-	_ syncertypes.OptionsProvider = &backendTLSPolicySyncer{}
+	_ syncertypes.Object             = &backendTLSPolicySyncer{}
+	_ syncertypes.Syncer             = &backendTLSPolicySyncer{}
+	_ syncertypes.OptionsProvider    = &backendTLSPolicySyncer{}
+	_ syncertypes.ControllerModifier = &backendTLSPolicySyncer{}
 )
 
 func New(ctx *synccontext.RegisterContext) (syncertypes.Object, error) {
@@ -53,6 +56,10 @@ func (s *backendTLSPolicySyncer) Options() *syncertypes.Options {
 	return &syncertypes.Options{
 		ObjectCaching: true,
 	}
+}
+
+func (s *backendTLSPolicySyncer) ModifyController(ctx *synccontext.RegisterContext, builder *builder.Builder) (*builder.Builder, error) {
+	return gatewayroutes.ModifyControllerForReferencedObjects(ctx, builder, s.GroupVersionKind(), mappings.Services(), mappings.ConfigMaps())
 }
 
 func (s *backendTLSPolicySyncer) SyncToHost(ctx *synccontext.SyncContext, event *synccontext.SyncToHostEvent[*gatewayv1.BackendTLSPolicy]) (ctrl.Result, error) {

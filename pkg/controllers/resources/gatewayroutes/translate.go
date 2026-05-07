@@ -210,13 +210,17 @@ func translatePolicyTargetRefToHost(ctx *synccontext.SyncContext, policyNamespac
 }
 
 func ModifyControllerForReferencedRoutes(ctx *synccontext.RegisterContext, builder *builder.Builder, routeGVK schema.GroupVersionKind) (*builder.Builder, error) {
-	for _, gvk := range []schema.GroupVersionKind{mappings.Gateways(), mappings.Services()} {
+	return ModifyControllerForReferencedObjects(ctx, builder, routeGVK, mappings.Gateways(), mappings.Services())
+}
+
+func ModifyControllerForReferencedObjects(ctx *synccontext.RegisterContext, builder *builder.Builder, objectGVK schema.GroupVersionKind, referencedGVKs ...schema.GroupVersionKind) (*builder.Builder, error) {
+	for _, gvk := range referencedGVKs {
 		if !ctx.Mappings.Has(gvk) {
 			continue
 		}
 
 		builder = builder.WatchesRawSource(ctx.Mappings.Store().Watch(gvk, func(nameMapping synccontext.NameMapping, queue workqueue.TypedRateLimitingInterface[ctrl.Request]) {
-			enqueueRoutesReferencingObject(ctx, routeGVK, nameMapping, queue)
+			enqueueObjectsReferencingObject(ctx, objectGVK, nameMapping, queue)
 		}))
 	}
 
@@ -329,12 +333,16 @@ func ensureManagedHostObject(ctx *synccontext.SyncContext, mapper synccontext.Ma
 }
 
 func enqueueRoutesReferencingObject(ctx *synccontext.RegisterContext, routeGVK schema.GroupVersionKind, nameMapping synccontext.NameMapping, queue workqueue.TypedRateLimitingInterface[ctrl.Request]) {
+	enqueueObjectsReferencingObject(ctx, routeGVK, nameMapping, queue)
+}
+
+func enqueueObjectsReferencingObject(ctx *synccontext.RegisterContext, objectGVK schema.GroupVersionKind, nameMapping synccontext.NameMapping, queue workqueue.TypedRateLimitingInterface[ctrl.Request]) {
 	references := ctx.Mappings.Store().ReferencesTo(ctx, synccontext.Object{
 		GroupVersionKind: nameMapping.GroupVersionKind,
 		NamespacedName:   nameMapping.VirtualName,
 	})
 	for _, reference := range references {
-		if reference.GroupVersionKind != routeGVK || reference.VirtualName.Name == "" {
+		if reference.GroupVersionKind != objectGVK || reference.VirtualName.Name == "" {
 			continue
 		}
 
