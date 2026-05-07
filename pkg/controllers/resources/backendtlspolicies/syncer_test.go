@@ -8,7 +8,10 @@ import (
 	"github.com/loft-sh/vcluster/pkg/syncer/synccontext"
 	syncertesting "github.com/loft-sh/vcluster/pkg/syncer/testing"
 	testingutil "github.com/loft-sh/vcluster/pkg/util/testing"
+	"github.com/loft-sh/vcluster/pkg/util/translate"
 	"gotest.tools/assert"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -19,12 +22,16 @@ const (
 	testPolicyName      = "testpolicy"
 	testPolicyNamespace = "test"
 	testServiceName     = "testservice"
+	testConfigMapName   = "ca-bundle"
 	testControllerName  = gatewayv1.GatewayController("example.com/gateway-controller")
 )
 
 func TestSync(t *testing.T) {
 	vPolicy := backendTLSPolicy(virtualPolicyMeta(), backendTLSPolicySpec())
-	syncCtx, syncer := startBackendTLSPolicySyncer(t, nil, []runtime.Object{vPolicy.DeepCopy()})
+	syncCtx, syncer := startBackendTLSPolicySyncer(t, []runtime.Object{
+		managedHostService(testServiceName, testPolicyNamespace),
+		managedHostConfigMap(testConfigMapName, testPolicyNamespace),
+	}, []runtime.Object{vPolicy.DeepCopy()})
 
 	_, err := syncer.SyncToHost(syncCtx, synccontext.NewSyncToHostEvent(vPolicy.DeepCopy()))
 	assert.NilError(t, err)
@@ -33,7 +40,7 @@ func TestSync(t *testing.T) {
 	storedHost := &gatewayv1.BackendTLSPolicy{}
 	err = syncCtx.HostClient.Get(syncCtx, pName, storedHost)
 	assert.NilError(t, err)
-	assert.DeepEqual(t, storedHost.Spec, vPolicy.Spec)
+	assert.DeepEqual(t, storedHost.Spec, hostBackendTLSPolicySpec())
 
 	hostStatus := backendTLSPolicyStatus()
 	storedHost.Status = hostStatus
@@ -47,6 +54,50 @@ func TestSync(t *testing.T) {
 	err = syncCtx.VirtualClient.Get(syncCtx, types.NamespacedName{Name: vPolicy.Name, Namespace: vPolicy.Namespace}, storedVirtual)
 	assert.NilError(t, err)
 	assert.DeepEqual(t, storedVirtual.Status, hostStatus)
+
+	err = syncCtx.HostClient.Get(syncCtx, pName, storedHost)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, storedHost.Spec, hostBackendTLSPolicySpec())
+}
+
+func TestSyncRejectsUnsyncedTargetRef(t *testing.T) {
+	vPolicy := backendTLSPolicy(virtualPolicyMeta(), backendTLSPolicySpec())
+	syncCtx, syncer := startBackendTLSPolicySyncer(t, []runtime.Object{
+		managedHostConfigMap(testConfigMapName, testPolicyNamespace),
+	}, []runtime.Object{vPolicy.DeepCopy()})
+
+	_, err := syncer.SyncToHost(syncCtx, synccontext.NewSyncToHostEvent(vPolicy.DeepCopy()))
+	assert.ErrorContains(t, err, `referenced Service "testservice" in namespace "test" has no synced host object`)
+
+	storedHost := &gatewayv1.BackendTLSPolicy{}
+	err = syncCtx.HostClient.Get(syncCtx, syncer.VirtualToHost(syncCtx, types.NamespacedName{Name: vPolicy.Name, Namespace: vPolicy.Namespace}, vPolicy), storedHost)
+	assert.Assert(t, apierrors.IsNotFound(err))
+}
+
+func TestSyncRejectsUnsyncedCACertificateRef(t *testing.T) {
+	vPolicy := backendTLSPolicy(virtualPolicyMeta(), backendTLSPolicySpec())
+	syncCtx, syncer := startBackendTLSPolicySyncer(t, []runtime.Object{
+		managedHostService(testServiceName, testPolicyNamespace),
+	}, []runtime.Object{vPolicy.DeepCopy()})
+
+	_, err := syncer.SyncToHost(syncCtx, synccontext.NewSyncToHostEvent(vPolicy.DeepCopy()))
+	assert.ErrorContains(t, err, `referenced ConfigMap "ca-bundle" in namespace "test" has no synced host object`)
+}
+
+func TestSyncSkipsReferenceValidationOnUpdate(t *testing.T) {
+	vPolicy := backendTLSPolicy(virtualPolicyMeta(), backendTLSPolicySpec())
+	pPolicy := backendTLSPolicy(hostPolicyMeta(), gatewayv1.BackendTLSPolicySpec{})
+	syncCtx, syncer := startBackendTLSPolicySyncer(t, []runtime.Object{pPolicy.DeepCopy()}, []runtime.Object{vPolicy.DeepCopy()})
+
+	pPolicy.ResourceVersion = "999"
+	vPolicy.ResourceVersion = "999"
+	_, err := syncer.Sync(syncCtx, synccontext.NewSyncEventWithOld(pPolicy.DeepCopy(), pPolicy.DeepCopy(), vPolicy.DeepCopy(), vPolicy.DeepCopy()))
+	assert.NilError(t, err)
+
+	storedHost := &gatewayv1.BackendTLSPolicy{}
+	err = syncCtx.HostClient.Get(syncCtx, types.NamespacedName{Name: pPolicy.Name, Namespace: pPolicy.Namespace}, storedHost)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, storedHost.Spec, hostBackendTLSPolicySpec())
 }
 
 func startBackendTLSPolicySyncer(
@@ -83,9 +134,15 @@ func virtualPolicyMeta() metav1.ObjectMeta {
 	}
 }
 
+func hostPolicyMeta() metav1.ObjectMeta {
+	return metav1.ObjectMeta{
+		Name:      hostName(testPolicyName, testPolicyNamespace),
+		Namespace: hostNamespace(testPolicyNamespace),
+	}
+}
+
 func backendTLSPolicySpec() gatewayv1.BackendTLSPolicySpec {
 	hostname := gatewayv1.PreciseHostname("backend.example.com")
-	wellKnownCA := gatewayv1.WellKnownCACertificatesType("System")
 	return gatewayv1.BackendTLSPolicySpec{
 		TargetRefs: []gatewayv1.LocalPolicyTargetReferenceWithSectionName{
 			{
@@ -97,10 +154,60 @@ func backendTLSPolicySpec() gatewayv1.BackendTLSPolicySpec {
 			},
 		},
 		Validation: gatewayv1.BackendTLSPolicyValidation{
-			WellKnownCACertificates: &wellKnownCA,
-			Hostname:                hostname,
+			CACertificateRefs: []gatewayv1.LocalObjectReference{
+				{
+					Group: gatewayv1.Group(""),
+					Kind:  gatewayv1.Kind("ConfigMap"),
+					Name:  gatewayv1.ObjectName(testConfigMapName),
+				},
+			},
+			Hostname: hostname,
 		},
 	}
+}
+
+func hostBackendTLSPolicySpec() gatewayv1.BackendTLSPolicySpec {
+	spec := backendTLSPolicySpec()
+	ret := *spec.DeepCopy()
+	ret.TargetRefs[0].Name = gatewayv1.ObjectName(hostName(testServiceName, testPolicyNamespace))
+	ret.Validation.CACertificateRefs[0].Name = gatewayv1.ObjectName(hostName(testConfigMapName, testPolicyNamespace))
+	return ret
+}
+
+func managedHostService(name, namespace string) *corev1.Service {
+	return translate.HostMetadata(&corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+	}, types.NamespacedName{
+		Name:      hostName(name, namespace),
+		Namespace: hostNamespace(namespace),
+	})
+}
+
+func managedHostConfigMap(name, namespace string) *corev1.ConfigMap {
+	return translate.HostMetadata(&corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+	}, types.NamespacedName{
+		Name:      hostName(name, namespace),
+		Namespace: hostNamespace(namespace),
+	})
+}
+
+func hostName(name, namespace string) string {
+	return translate.SingleNamespaceHostName(name, namespace, translate.VClusterName)
+}
+
+func hostNamespace(namespace string) string {
+	if namespace == "" {
+		return ""
+	}
+
+	return testingutil.DefaultTestTargetNamespace
 }
 
 func backendTLSPolicyStatus() gatewayv1.PolicyStatus {

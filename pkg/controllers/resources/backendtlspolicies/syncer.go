@@ -60,9 +60,12 @@ func (s *backendTLSPolicySyncer) SyncToHost(ctx *synccontext.SyncContext, event 
 		return patcher.DeleteVirtualObject(ctx, event.Virtual, event.HostOld, "host object was deleted")
 	}
 
-	pObj := translate.HostMetadata(event.Virtual, s.VirtualToHost(ctx, types.NamespacedName{Name: event.Virtual.Name, Namespace: event.Virtual.Namespace}, event.Virtual))
+	pObj, err := s.translate(ctx, event.Virtual)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 
-	err := pro.ApplyPatchesHostObject(ctx, nil, pObj, event.Virtual, nil, false)
+	err = pro.ApplyPatchesHostObject(ctx, nil, pObj, event.Virtual, nil, false)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -71,6 +74,11 @@ func (s *backendTLSPolicySyncer) SyncToHost(ctx *synccontext.SyncContext, event 
 }
 
 func (s *backendTLSPolicySyncer) Sync(ctx *synccontext.SyncContext, event *synccontext.SyncEvent[*gatewayv1.BackendTLSPolicy]) (_ ctrl.Result, retErr error) {
+	hSpec, err := translateSpecToHost(ctx, event.Virtual, false)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to translate spec: %w", err)
+	}
+
 	patch, err := patcher.NewSyncerPatcher(ctx, event.Host, event.Virtual, patcher.TranslatePatches(nil, false))
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("new syncer patcher: %w", err)
@@ -96,7 +104,7 @@ func (s *backendTLSPolicySyncer) Sync(ctx *synccontext.SyncContext, event *syncc
 	event.Virtual.Status = event.Host.Status
 	event.Virtual.Labels, event.Host.Labels = translate.LabelsBidirectionalUpdate(event)
 	event.Virtual.Annotations, event.Host.Annotations = translate.AnnotationsBidirectionalUpdate(event)
-	event.Host.Spec = event.Virtual.Spec
+	event.Host.Spec = *hSpec
 
 	return ctrl.Result{}, nil
 }
