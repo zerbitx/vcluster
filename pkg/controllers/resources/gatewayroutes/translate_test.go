@@ -131,6 +131,32 @@ func TestMissingServiceParentRefRecordsReferenceForRequeue(t *testing.T) {
 	assert.DeepEqual(t, item, reconcile.Request{NamespacedName: routeMapping.VirtualName})
 }
 
+func TestEnqueueObjectsReferencingObject(t *testing.T) {
+	syncCtx, registerCtx := newGatewayRouteTestContext(t, nil, nil)
+	policyMapping := synccontext.NameMapping{
+		GroupVersionKind: mappings.BackendTLSPolicies(),
+		VirtualName:      types.NamespacedName{Name: "policy", Namespace: testRouteNamespace},
+		HostName:         types.NamespacedName{Name: hostName("policy", testRouteNamespace), Namespace: hostNamespace(testRouteNamespace)},
+	}
+	configMapMapping := synccontext.NameMapping{
+		GroupVersionKind: mappings.ConfigMaps(),
+		VirtualName:      types.NamespacedName{Name: "ca-bundle", Namespace: testRouteNamespace},
+		HostName:         types.NamespacedName{Name: hostName("ca-bundle", testRouteNamespace), Namespace: hostNamespace(testRouteNamespace)},
+	}
+	addMapping(t, syncCtx, policyMapping)
+	err := syncCtx.Mappings.Store().AddReferenceAndSave(syncCtx, configMapMapping, policyMapping)
+	assert.NilError(t, err)
+
+	queue := workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[ctrl.Request]())
+	defer queue.ShutDown()
+
+	enqueueObjectsReferencingObject(registerCtx, mappings.BackendTLSPolicies(), configMapMapping, queue)
+	item, shutdown := queue.Get()
+	assert.Assert(t, !shutdown)
+	defer queue.Done(item)
+	assert.DeepEqual(t, item, reconcile.Request{NamespacedName: policyMapping.VirtualName})
+}
+
 func TestParentStatusHostNamespace(t *testing.T) {
 	sectionName := gatewayv1.SectionName("https")
 	port := gatewayv1.PortNumber(443)
